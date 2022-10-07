@@ -1,7 +1,12 @@
+use std::io::LineWriter;
 //#[macro_use]
 //extern crate nalgebra as na;
 use std::ops;
 use std::fmt;
+use plotters::prelude::*;
+
+use std::fs::OpenOptions;
+use std::io::Write;
 
 
 struct Point {
@@ -153,13 +158,13 @@ fn bond_vector(P1:Point, P2:Point) -> f64 {
     return f64::sqrt(f64::powf(P1.x - P2.x, 2.) + f64::powf(P1.y - P2.y, 2.));
 }
 
-fn bond_vec_arr<const LEN: usize>(P1:Point, P:&[Point; LEN], id:usize) -> [f64; LEN]{
+fn bond_vec_arr(P1:Point, P:&Vec<Point>, id:usize) -> Vec<f64>{
     //Bond vector:  ξ = X`-X
 
     // input: Location of Point and Locations of Pointcollection
     // return: Collection of distances
 
-    let mut P_coll = [0.0; LEN];
+    let mut P_coll = vec![0.0; P.len()];
     let mut c = 0;
     for i in P {
         if id != c {
@@ -178,13 +183,13 @@ fn bond_displacement(P1u:f64, P2u:f64) -> f64 {
     return P2u - P1u;
 }
 
-fn bond_displacement_arr<const LEN: usize>(P1u:f64, Pu:&[f64; LEN], id:usize) -> [f64; LEN] {
+fn bond_displacement_arr(P1u:f64, Pu:&Vec<f64>, id:usize) -> Vec<f64> {
     // bond displacement: η(t) = u(X`,t) - u(X,t)
 
     // input: Displacment of Point and Displacement of Pointcollection
     // return: Collection of displacement-differences
 
-    let mut P_coll = [0.0; LEN];
+    let mut P_coll = vec![0.0; Pu.len()];
     let mut c = 0;
     for i in Pu {
         if id != c {
@@ -203,18 +208,24 @@ fn bond_displacement_arr<const LEN: usize>(P1u:f64, Pu:&[f64; LEN], id:usize) ->
 fn main() {
     // Coordinates of Points
     let domain = [0., 10., 0., 10.];
-    const nx:usize = 80;
-    const ny:usize = 80;
+    const nx:usize = 50;
+    const ny:usize = 50;
     const node_count:usize = nx*ny;
 
     let dx = domain[1]/nx as f64;
     let dy = domain[3]/ny as f64;
 
-    let mut p_col = [Point{x:0., y:0.}; node_count];
-    let mut p_vol_col = [1.0; node_count];
-    let mut p_u_col = [0.; node_count];
+    let delta = 3.0;
+    let E = 210.;
+    let nu = 0.3;
+    let K = E/(3.-6.*nu);
 
-    p_u_col[50] = 0.2; // definie an initial local displacement
+
+    let mut p_col = vec![Point{x:0., y:0.}; node_count];
+    let mut p_vol_col = vec![1.0; node_count];
+    let mut p_u_col = vec![0.; node_count];
+
+    p_u_col[0] = 0.1; // definie an initial local displacement
 
     // populate domain with nodes
     let mut c = 0;
@@ -245,41 +256,86 @@ fn main() {
     // c=6K/(π δ^3), K: bulk modulus K=E/(3-6 \nu)
     // oder c_i = 18K/(Σ V_j), j ∈ H_δ
 
-    let delta = 3.0;
-    let E = 210_000.;
-    let nu = 0.3;
-    let K = E/(3.-6.*nu);
+    let mut W = vec![0.;node_count];
 
-    let mut W = [0.;node_count];
-
-    for (counter, i) in p_col.into_iter().enumerate() {
+    // main loop
+    for (counter, i) in p_col.iter().enumerate() {
         
-        
-        let xi = bond_vec_arr(i, &p_col, counter);
+        let xi = bond_vec_arr(*i, &p_col, counter);
         let eta = bond_displacement_arr(p_u_col[counter], &p_u_col, counter);
 
-        let omega: Vec<bool> = xi.into_iter().map(|x|x > delta).collect();
+        let omega: Vec<bool> = xi.iter().map(|x|x <= &delta).collect();
         let mut v_sum = 0.;
         for (c, v) in p_vol_col.iter().enumerate() {
             if counter != c {
                 if omega[c] == true {
-                    v_sum += p_vol_col[c];
+                    v_sum += *v;
                 }
             }
         }
 
-        let mut c = 18.*K/v_sum;
+        //let c = 18.*K/v_sum;
+        let c = 6.*K/(3.14*f64::powf(delta, 3.));
         
 
-        for j in 0..xi.len()
+        for j in 0..node_count
         {
             if counter != j {
-                let mut s = f64::abs(xi[j] + eta[j])/f64::abs(xi[j]);
-                W[counter] += p_vol_col[counter]*0.5*c*f64::powf(s, 2.);    // energy density trasnfered to linear elasticity
+                let s = f64::abs(xi[j] + eta[j])/f64::abs(xi[j]);
+                if xi[j] <= delta
+                    {
+                        W[counter] += p_vol_col[counter]*0.5*c*f64::powf(s, 2.);    // energy density trasnfered to linear elasticity
+                    }
             }
         }
-        //let c = 6.*K/(3.14*f64::powf(delta, 3.));
+        
     }
+
+
+    // PLOTIING
+    let root = BitMapBackend::new("images/3d-surface.png", (640, 480)).into_drawing_area();
+    root.fill(&WHITE).unwrap();
+
+    let mut chart = ChartBuilder::on(&root)
+        .margin(20)
+        .caption("Eneregy Density", ("sans-serif", 40))
+        .build_cartesian_3d(domain[0]..domain[1], 0.0..3000.0, domain[2]..domain[3])
+        .unwrap();
+
+    chart.configure_axes().draw().unwrap();
+
+
+    let mut data = vec![];
+
+    let mut file = OpenOptions::new().append(true).open("data.txt").expect("cannot open.");
+
+    for y in 0..=ny as i32 {
+        let mut row = vec![];
+        for x in 0..=nx as i32 {
+            row.push((x as f64 * dx, W[x as usize+y as usize *dx as usize], y as f64 * dy));
+            let mut str = format!("{}, {}, {}\n", x as f64 * dx, W[x as usize+y as usize *dx as usize], y as f64 * dy);
+            file.write_all( str.as_bytes()).expect("write failed");
+            //println!("{}, {}, {}", x as f64 * dx, W[x as usize+y as usize *dx as usize], y as f64 * dy)
+        }
+        data.push(row);
+    }
+
+    chart.draw_series(
+        (0..nx-1)
+            .map(|x| std::iter::repeat(x).zip(0..ny-1))
+            .flatten()
+            .map(|(x,z)| {
+                Polygon::new(vec![
+                    data[x][z],
+                    data[x+1][z],
+                    data[x+1][z+1],
+                    data[x][z+1],
+                ], &BLUE.mix(0.3))
+            })
+    ).unwrap();
+
+
+
 
     println!("W1: {}", W[0]);
     println!("W2: {}", W[1]);
