@@ -1,0 +1,40 @@
+vec = [0:0.025:1];
+
+x_cor = repmat(vec,size(vec,2),1);
+y_cor = x_cor.';
+
+u = x_cor.*0;
+delta = 0.2;
+
+u(5,5) = 1e-5;
+
+W = x_cor.*0;
+c = 100;
+
+for ii= 1:size(x_cor,1)
+    for jj = 1:size(x_cor,2)
+        %% Calculate total energy potential
+        for k = 1:size(x_cor,1)
+            for l = 1:size(x_cor,2)
+                xi = ((x_cor(ii,jj)-x_cor).^2 + (y_cor(ii,jj)-y_cor).^2).^2;
+                if k ~= ii && l ~= jj
+                    if xi(k,l)<= delta
+                        eta = u(ii,jj)-u;
+                        
+                        s = (xi(k,l) + eta(k,l)) / xi(k,l);
+                        if isnan(s) == 1
+                            disp("oho");
+                        end
+                        W(ii,jj) = W(ii,jj) + 0.5*c*s^2;
+                    end
+                end
+            end
+        end
+        
+    end
+end
+
+surf(W)
+
+
+
