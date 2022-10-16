@@ -3,6 +3,7 @@ use std::io::LineWriter;
 //extern crate nalgebra as na;
 use std::ops;
 use std::fmt;
+use plotters::data;
 use plotters::prelude::*;
 
 use std::fs::OpenOptions;
@@ -168,7 +169,7 @@ fn bond_vec_arr(P1:Point, P:&Vec<Point>, id:usize) -> Vec<f64>{
     let mut c = 0;
     for i in P {
         if id != c {
-            P_coll[c] = f64::sqrt(f64::powf(P1.x - P[c].x, 2.) + f64::powf(P1.y - P[c].y, 2.));
+            P_coll[c] = f64::sqrt(f64::powf(i.x - P1.x, 2.) + f64::powf(i.y - P1.y, 2.));
         }
         else {
             P_coll[c] = 0.0
@@ -257,9 +258,17 @@ fn main() {
     // oder c_i = 18K/(Σ V_j), j ∈ H_δ
 
     let mut W = vec![0.;node_count];
+    let mut W_max = 0.0;
+    let mut W_min = 1e+16;
+
+    let mut file = OpenOptions::new().create_new(true).append(true).open("raw_data.txt").expect("cannot open.");
+
+    
+    let mut datarows = vec![];
 
     // main loop
     for (counter, i) in p_col.iter().enumerate() {
+        
         
         let xi = bond_vec_arr(*i, &p_col, counter);
         let eta = bond_displacement_arr(p_u_col[counter], &p_u_col, counter);
@@ -285,56 +294,48 @@ fn main() {
                 if xi[j] <= delta
                     {
                         W[counter] += p_vol_col[counter]*0.5*c*f64::powf(s, 2.);    // energy density trasnfered to linear elasticity
+                        if W[counter] > W_max {
+                            W_max = W[counter];
+                        }
+                        if W[counter] < W_min {
+                            W_min = W[counter];
+                        }
+                        
                     }
             }
         }
+        datarows.push((i.x, i.y, W[counter]));
+
+        let mut str = format!("{}, {}, {}\n", i.x, i.y, W[counter]);
+            file.write_all( str.as_bytes()).expect("write failed");
         
     }
 
 
-    // PLOTIING
-    let root = BitMapBackend::new("images/3d-surface.png", (640, 480)).into_drawing_area();
-    root.fill(&WHITE).unwrap();
-
-    let mut chart = ChartBuilder::on(&root)
-        .margin(20)
-        .caption("Eneregy Density", ("sans-serif", 40))
-        .build_cartesian_3d(domain[0]..domain[1], 0.0..3000.0, domain[2]..domain[3])
-        .unwrap();
-
-    chart.configure_axes().draw().unwrap();
+    
 
 
-    let mut data = vec![];
-
-    let mut file = OpenOptions::new().append(true).open("data.txt").expect("cannot open.");
-
-    for y in 0..=ny as i32 {
-        let mut row = vec![];
-        for x in 0..=nx as i32 {
-            row.push((x as f64 * dx, W[x as usize+y as usize *dx as usize], y as f64 * dy));
-            let mut str = format!("{}, {}, {}\n", x as f64 * dx, W[x as usize+y as usize *dx as usize], y as f64 * dy);
-            file.write_all( str.as_bytes()).expect("write failed");
-            //println!("{}, {}, {}", x as f64 * dx, W[x as usize+y as usize *dx as usize], y as f64 * dy)
-        }
-        data.push(row);
+    // Plotting
+    let mut file = OpenOptions::new().create_new(true).append(true).open("data.vtk").expect("cannot open.");
+    //Header
+    file.write_all("DATASET UNSTRUCTURED_GRID\n".as_bytes()).expect("error");
+    file.write_all(format!("POINTS {} float\n",datarows.len()).as_bytes()).expect("error");
+    
+    for rows in datarows.iter()
+    {
+        file.write_all(format!("{:.2} {:.2} {:.4}\n", rows.0, rows.1, rows. 2).as_bytes()).expect("error");
     }
 
-    chart.draw_series(
-        (0..nx-1)
-            .map(|x| std::iter::repeat(x).zip(0..ny-1))
-            .flatten()
-            .map(|(x,z)| {
-                Polygon::new(vec![
-                    data[x][z],
-                    data[x+1][z],
-                    data[x+1][z+1],
-                    data[x][z+1],
-                ], &BLUE.mix(0.3))
-            })
-    ).unwrap();
-
-
+    file.write_all(format!("CELLS {} {}\n",datarows.len(), datarows.len()*2).as_bytes()).expect("error");
+    for rows in datarows.iter().enumerate()
+    {
+        file.write_all(format!("1 {}\n", rows.0 as i32).as_bytes()).expect("error");
+    }
+    file.write_all(format!("CELL_TYPES {}\n",datarows.len()).as_bytes()).expect("error");
+    for rows in datarows.iter()
+    {
+        file.write_all("1\n".as_bytes()).expect("error");
+    }
 
 
     println!("W1: {}", W[0]);
@@ -343,14 +344,6 @@ fn main() {
     println!("W4: {}", W[3]);
     println!("W5: {}", W[4]);
     println!("W100: {}", W[99]);
-
-
-
-
-
-
-
-
 
 
     let P1_coor = Point{x:0., y:0.};
