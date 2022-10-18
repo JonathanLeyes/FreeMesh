@@ -9,6 +9,9 @@ use plotters::prelude::*;
 use std::fs::OpenOptions;
 use std::io::Write;
 
+use std::time::{Duration, Instant};
+use std::sync::{Arc, Mutex};
+
 
 struct Point {
     x: f64,
@@ -208,9 +211,10 @@ fn bond_displacement_arr(P1u:f64, Pu:&Vec<f64>, id:usize) -> Vec<f64> {
 
 fn main() {
     // Coordinates of Points
+    let start = Instant::now();
     let domain = [0., 10., 0., 10.];
-    const nx:usize = 50;
-    const ny:usize = 50;
+    const nx:usize = 80;
+    const ny:usize = 80;
     const node_count:usize = nx*ny;
 
     let dx = domain[1]/nx as f64;
@@ -226,10 +230,11 @@ fn main() {
     let mut p_vol_col = vec![1.0; node_count];
     let mut p_u_col = vec![0.; node_count];
 
-    p_u_col[0] = 0.1; // definie an initial local displacement
+    p_u_col[300] = 0.5; // definie an initial local displacement
 
     // populate domain with nodes
     let mut c = 0;
+
     for i in 0..nx as i32 {
         for j in 0..ny as i32 {
             p_col[c] = Point {x:domain[0]+dx*i as f64, y:dy*j as f64};
@@ -257,18 +262,56 @@ fn main() {
     // c=6K/(π δ^3), K: bulk modulus K=E/(3-6 \nu)
     // oder c_i = 18K/(Σ V_j), j ∈ H_δ
 
-    let mut W = vec![0.;node_count];
+    let mut W = Arc::new(Mutex::new(vec![0.;node_count]));
     let mut W_max = 0.0;
     let mut W_min = 1e+16;
 
-    let mut file = OpenOptions::new().create_new(true).append(true).open("raw_data.txt").expect("cannot open.");
+    let mut file = Arc::new(Mutex::new(OpenOptions::new().create_new(true).append(true).open("raw_data.txt").expect("cannot open.")));
 
     
-    let mut datarows = vec![];
+    //let mut datarows = vec![];
 
     // main loop
+    use rayon::prelude::*;
+
+    p_col.par_iter().enumerate().for_each(|(counter, i)| {
+        let xi = bond_vec_arr(*i, &p_col, counter);
+        let eta = bond_displacement_arr(p_u_col[counter], &p_u_col, counter);
+
+        let omega: Vec<bool> = xi.iter().map(|x|x <= &delta).collect();
+        let mut v_sum = 0.;
+        for (c, v) in p_vol_col.iter().enumerate() {
+            if counter != c {
+                if omega[c] == true {
+                    v_sum += *v;
+                }
+            }
+        }
+        let c = 6.*K/(3.14*f64::powf(delta, 3.));
+        for j in 0..node_count
+        {
+            if counter != j {
+                let s = f64::abs(xi[j] + eta[j])/f64::abs(xi[j]);
+                if xi[j] <= delta
+                    {
+                        W.lock().unwrap()[counter] += p_vol_col[counter]*0.5*c*f64::powf(s, 2.);    // energy density trasnfered to linear elasticity
+                        /*if W.lock().unwrap()[counter] > W_max {
+                            //W_max = W.lock().unwrap()[counter];
+                        }
+                        if W.lock().unwrap()[counter] < W_min {
+                            //W_min = W.lock().unwrap()[counter];
+                        }*/
+                        
+                    }
+            }
+        }
+        //datarows.push((i.x, i.y, W.lock().unwrap()[counter]));
+
+        let mut str = format!("{}, {}, {}\n", i.x, i.y, W.lock().unwrap()[counter]);
+            file.lock().unwrap().write_all( str.as_bytes()).expect("write failed");
+    });
+/* 
     for (counter, i) in p_col.iter().enumerate() {
-        
         
         let xi = bond_vec_arr(*i, &p_col, counter);
         let eta = bond_displacement_arr(p_u_col[counter], &p_u_col, counter);
@@ -310,34 +353,12 @@ fn main() {
             file.write_all( str.as_bytes()).expect("write failed");
         
     }
+*/
+    let duration = start.elapsed();
+    println!("Time elapsed: {:?}", duration);
 
 
-    
-
-
-    // Plotting
-    let mut file = OpenOptions::new().create_new(true).append(true).open("data.vtk").expect("cannot open.");
-    //Header
-    file.write_all("DATASET UNSTRUCTURED_GRID\n".as_bytes()).expect("error");
-    file.write_all(format!("POINTS {} float\n",datarows.len()).as_bytes()).expect("error");
-    
-    for rows in datarows.iter()
-    {
-        file.write_all(format!("{:.2} {:.2} {:.4}\n", rows.0, rows.1, rows. 2).as_bytes()).expect("error");
-    }
-
-    file.write_all(format!("CELLS {} {}\n",datarows.len(), datarows.len()*2).as_bytes()).expect("error");
-    for rows in datarows.iter().enumerate()
-    {
-        file.write_all(format!("1 {}\n", rows.0 as i32).as_bytes()).expect("error");
-    }
-    file.write_all(format!("CELL_TYPES {}\n",datarows.len()).as_bytes()).expect("error");
-    for rows in datarows.iter()
-    {
-        file.write_all("1\n".as_bytes()).expect("error");
-    }
-
-
+/*
     println!("W1: {}", W[0]);
     println!("W2: {}", W[1]);
     println!("W3: {}", W[2]);
@@ -345,6 +366,7 @@ fn main() {
     println!("W5: {}", W[4]);
     println!("W100: {}", W[99]);
 
+*/
 
     let P1_coor = Point{x:0., y:0.};
     let P1_mass = Scalar {value: 10.};
